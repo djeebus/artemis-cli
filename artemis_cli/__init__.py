@@ -97,16 +97,18 @@ class BaseProcessor:
         return func(packet)
 
 
-class GameState:
+class GameState(diana.tracking.Tracker):
+    interested_packets = {
+        packets.AllShipSettingsPacket,
+        packets.ConsoleStatusPacket,
+    }
+
     def __init__(self):
         self.ships = None
         self.consoles = None
         self._ship_index = None
 
-        self._tracker = diana.tracking.Tracker()
-
-    def rx(self, packet):
-        self._tracker.rx(packet)
+        super().__init__()
 
     @property
     def ship(self):
@@ -117,40 +119,51 @@ class GameState:
     def ship(self, ship_index):
         self._ship_index = ship_index
 
+    def rx(self, packet):
+        super().rx(packet)
+
+        if isinstance(packet, packets.AllShipSettingsPacket):
+            self.ships = packet.ships
+        elif isinstance(packet, packets.ConsoleStatusPacket):
+            self.consoles = packet.consoles
+            self.ship = packet.ship
+        elif isinstance(packet, packets.ObjectUpdatePacket):
+            pass
+        else:
+            return False
+
 
 class GameProcessor(BaseProcessor):
     @classmethod
-    def run(cls, rx):
+    def run(cls, rx, tracker):
         processor = GameProcessor()
 
         for packet in rx:
-            processor.process(packet)
+            handled = tracker.rx(packet)
+            if handled is False:
+                processor.process(packet)
 
-    def __init__(self):
-        self._state = GameState()
+    def __init__(self, game_state, tracker):
+        self._state = game_state
+        self._tracker = tracker
 
     def process(self, packet):
-        self._state.rx(packet)
         return super().process(packet)
 
-    def all_ship_settings(self, packet: packets.AllShipSettingsPacket):
-        self._state.all_ships = packet.ships
-
-    def console_status(self, status: packets.ConsoleStatusPacket):
-        self._state.consoles = status.consoles
-        self._state.ship = status.ship
-
-    def heartbeat(self, packet: packets.HeartbeatPacket):
-        pass
+    def beam_fired_packet(self, packet: packets.BeamFiredPacket):
+        print("beam fired! <not really handled yet>")
 
     def comms_incoming(self, packet: packets.CommsIncomingPacket):
         print("incoming message from %s: %s"
               % (packet.sender, packet.message))
 
-    def noise(self, noice: packets.NoisePacket):
+    def heartbeat(self, packet: packets.HeartbeatPacket):
         pass
 
-    def object_update(self, packet: packets.ObjectUpdatePacket):
+    def intel(self, intel: packets.IntelPacket):
+        pass
+
+    def noise(self, noise: packets.NoisePacket):
         pass
 
     def version(self, version):
@@ -174,10 +187,11 @@ def cli():
         loop.cmdloop()
 
     tx, rx = loop.connection
+    tracker = diana.tracking.Tracker()
 
     recv_thread = threading.Thread(
         name='RX thread',
-        target=GameProcessor.run, args=(rx,),
+        target=GameProcessor.run, args=(rx, tracker),
         daemon=True,
     )
     recv_thread.start()
